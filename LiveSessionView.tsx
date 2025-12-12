@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect, useRef } from "react";
-import { GoogleGenAI, Type, LiveServerMessage, Modality } from "@google/genai";
+import { GoogleGenAI, Type, LiveServerMessage, Modality, FunctionDeclaration } from "@google/genai";
 import { ExerciseLog, WorkoutSession } from "./types";
 import { db } from "./db";
 import {
@@ -131,32 +130,20 @@ export const LiveSessionView = ({
       setStatus("Loading instructions...");
       const promptResponse = await fetch("trainer_prompt.txt");
       if (!promptResponse.ok) throw new Error("Failed to load trainer prompts");
-      let systemInstruction = await promptResponse.text();
+      const baseInstructions = await promptResponse.text();
 
-      // INJECT DYNAMIC USER CONTEXT
+      let userContext = "";
+
+      // INJECT DYNAMIC USER CONTEXT (Simplified per request)
       if (profile) {
-          systemInstruction += `\n\n**USER CONTEXT - IMPORTANT**\n`;
-          systemInstruction += `User Name: ${profile.displayName}\n`;
-          if (profile.goals) systemInstruction += `User Goals: ${profile.goals}\n`;
-          if (profile.interests) systemInstruction += `User Likes: ${profile.interests}\n`;
-          
-          if (profile.expertSuggestions) {
-             try {
-                // If the suggestions are JSON (new format), parse them for the LLM prompt
-                const suggestions = JSON.parse(profile.expertSuggestions);
-                systemInstruction += `**Gym Expert Strategy (Follow this):**\nTitle: ${suggestions.title}\n`;
-                if (suggestions.points) {
-                    suggestions.points.forEach((pt: any) => {
-                        systemInstruction += `- ${pt.focus}: ${pt.instruction}\n`;
-                    });
-                }
-             } catch(e) {
-                // Fallback for old plain text
-                systemInstruction += `**Gym Expert Strategy (Follow this):** ${profile.expertSuggestions}\n`;
-             }
-          }
-          systemInstruction += `\nTailor your motivation and feedback to these goals.`;
+          userContext += `**USER CONTEXT**\n`;
+          if (profile.goals) userContext += `User Goals: ${profile.goals}\n`;
+          if (profile.interests) userContext += `User Interests: ${profile.interests}\n`;
+          userContext += `\nTailor your motivation and feedback strictly to these goals.`;
       }
+
+      // Concatenate as plain string for Live API compatibility
+      const fullSystemInstruction = `${userContext}\n\n*** SYSTEM INSTRUCTIONS (PRIORITY) ***\n\n${baseInstructions}`;
 
       setStatus("Requesting permissions...");
       
@@ -184,7 +171,7 @@ export const LiveSessionView = ({
       setStatus("Connecting to Gemini...");
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
-      const reportExerciseTool = {
+      const reportExerciseTool: FunctionDeclaration = {
         name: "report_exercise_status",
         parameters: {
           type: Type.OBJECT,
@@ -219,7 +206,8 @@ export const LiveSessionView = ({
         model: "gemini-2.5-flash-native-audio-preview-09-2025",
         config: {
           tools: [{ functionDeclarations: [reportExerciseTool] }],
-          systemInstruction: systemInstruction,
+          // Live API expects a string for systemInstruction, not a Content object
+          systemInstruction: fullSystemInstruction,
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
